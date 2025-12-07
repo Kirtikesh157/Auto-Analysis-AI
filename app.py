@@ -212,6 +212,3 @@ elif page == "NL → SQL":
 
 elif page == "About":
     render_about()
-
-# footer
-st.markdown("<div style='margin-top:12px; color:#9CA3AF; font-size:12px;'>Tip: Data Cleaning saves cleaned DataFrame in '__cleaned_df__' and audit to '__cleaned_meta__'.</div>", unsafe_allow_html=True)
