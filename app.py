@@ -5,6 +5,7 @@ from data_cleaning import render_data_cleaning
 from eda import render_eda
 from automl import render_automl
 from about import render_about
+from nl2sql import render_nl2sql
 # ---------------------------
 # Page config
 # ---------------------------
@@ -207,8 +208,7 @@ elif page == "AutoML":
     render_automl()
 
 elif page == "NL → SQL":
-    st.header("NL → SQL")
-    st.write("NL → SQL page (UI placeholder).")
+    render_nl2sql()
 
 elif page == "About":
     render_about()

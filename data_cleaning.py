@@ -1,299 +1,186 @@
 # data_cleaning.py
+"""
+Simple & safe Data Cleaning page for AutoAnalyst AI.
+
+Features (minimal but accurate):
+- Inspect missingness summary
+- Drop columns with missing% >= threshold (slider)
+- Drop rows:
+    * drop if any missing (global), or
+    * drop if missing in a selected set of columns
+- Preview before/after, show audit log
+- Save cleaned DataFrame to st.session_state["__cleaned_df__"]
+- Download cleaned CSV and rollback cleaned dataset
+
+No model-based imputation included (keeps behavior simple & reproducible).
+"""
+
 import streamlit as st
 import pandas as pd
-import numpy as np
-from copy import deepcopy
-
-# Optional model-based imputers
-try:
-    from sklearn.impute import KNNImputer, SimpleImputer
-    from sklearn.experimental import enable_iterative_imputer  # noqa
-    from sklearn.impute import IterativeImputer
-    SKLEARN_AVAILABLE = True
-except Exception:
-    SKLEARN_AVAILABLE = False
 
 SESSION_RAW = "__uploaded_df__"
 SESSION_CLEAN = "__cleaned_df__"
 SESSION_CLEAN_META = "__cleaned_meta__"
 
-def _missing_summary(df: pd.DataFrame):
-    miss = df.isna().sum()
-    pct = miss / len(df)
-    summary = pd.DataFrame({
-        "missing_count": miss,
-        "missing_pct": pct
-    }).sort_values("missing_pct", ascending=False)
-    return summary
-
-def _default_strategy_for_series(s: pd.Series):
-    if pd.api.types.is_numeric_dtype(s):
-        return "median"
-    if pd.api.types.is_datetime64_any_dtype(s):
-        return "ffill"
-    if pd.api.types.is_bool_dtype(s):
-        return "mode"
-    # object / categorical / text
-    nunique = s.nunique(dropna=True)
-    if nunique <= 20:
-        return "mode"
-    return "missing_token"
-
-def _apply_strategy_to_series(s: pd.Series, strategy: str, constant_value=None, groupby=None, df=None):
-    # returns new_series, info dict (what was done)
-    info = {"strategy": strategy}
-    orig_na = s.isna()
-    new_s = s.copy()
-    if strategy == "leave":
-        return new_s, info
-    if strategy == "drop":
-        return None, info
-    if strategy == "median":
-        med = s.median()
-        new_s = s.fillna(med)
-        info["filled_with"] = med
-    elif strategy == "mean":
-        m = s.mean()
-        new_s = s.fillna(m)
-        info["filled_with"] = m
-    elif strategy == "mode":
-        try:
-            mode = s.mode(dropna=True)
-            modev = mode.iloc[0] if len(mode)>0 else ""
-        except Exception:
-            modev = ""
-        new_s = s.fillna(modev)
-        info["filled_with"] = modev
-    elif strategy == "constant":
-        new_s = s.fillna(constant_value)
-        info["filled_with"] = constant_value
-    elif strategy == "missing_token":
-        new_s = s.fillna("__MISSING__")
-        info["filled_with"] = "__MISSING__"
-    elif strategy == "ffill":
-        new_s = s.fillna(method="ffill")
-        info["filled_with"] = "ffill"
-    elif strategy == "bfill":
-        new_s = s.fillna(method="bfill")
-        info["filled_with"] = "bfill"
-    elif strategy == "interpolate":
-        try:
-            new_s = s.interpolate(method="linear")
-            info["filled_with"] = "interpolate"
-        except Exception:
-            new_s = s
-            info["error"] = "interpolate_failed"
-    elif strategy == "knn" and SKLEARN_AVAILABLE:
-        # KNN imputer needs numeric matrix: user should pick numeric-only columns in UI
-        raise NotImplementedError("knn should be applied at dataframe-level using sklearn's KNNImputer")
-    elif strategy == "mice" and SKLEARN_AVAILABLE:
-        raise NotImplementedError("mice requires iterative imputer at dataframe-level")
-    else:
-        # fallback
-        new_s = s
-        info["error"] = f"strategy_{strategy}_not_implemented"
-    info["n_filled"] = int(orig_na.sum() - new_s.isna().sum())
-    return new_s, info
-
 def render_data_cleaning():
-    st.header("Data Cleaning")
+    st.header("Data Cleaning — Simple & Safe")
+
     if SESSION_RAW not in st.session_state:
         st.warning("No dataset loaded. Go to Data Upload and load a dataset first.")
         return
 
-    raw_df = st.session_state[SESSION_RAW]
-    # ensure we work on a copy
-    if SESSION_CLEAN in st.session_state:
-        clean_df = st.session_state[SESSION_CLEAN].copy()
+    raw_df = st.session_state[SESSION_RAW].copy()
+    n_rows, n_cols = raw_df.shape
+    st.markdown(f"**Loaded dataset:** {n_rows} rows × {n_cols} columns")
+
+    # --- missingness summary
+    st.subheader("Missingness summary")
+    miss = raw_df.isna().sum().sort_values(ascending=False)
+    miss_pct = (miss / len(raw_df)).round(4)
+    miss_df = pd.DataFrame({"missing_count": miss, "missing_pct": miss_pct})
+    st.dataframe(miss_df.style.format({"missing_pct": "{:.2%}"}))
+
+    st.markdown("---")
+
+    # --- options
+    st.subheader("Dropping options (safe defaults)")
+
+    col1, col2 = st.columns(2)
+    with col1:
+        drop_cols_thresh = st.slider(
+            "Drop columns with missing percentage ≥",
+            min_value=0.0, max_value=1.0, value=0.5, step=0.05, format="%.2f"
+        )
+        drop_cols = st.checkbox("Enable drop columns above threshold", value=True)
+    with col2:
+        row_drop_mode = st.selectbox(
+            "Row drop option",
+            options=[
+                "Don't drop rows",
+                "Drop rows with any missing value",
+                "Drop rows with missing in selected columns"
+            ],
+            index=0
+        )
+
+    cols_to_check = []
+    if row_drop_mode == "Drop rows with missing in selected columns":
+        # let user pick columns (default: top 5 missing)
+        top_missing = miss[miss > 0].index.tolist()[:5]
+        cols_to_check = st.multiselect("Select columns to consider for row-drop", options=raw_df.columns.tolist(), default=top_missing)
+
+    st.markdown("---")
+
+    # --- Preview area: compute what WOULD be dropped
+    st.subheader("Preview changes (no writes yet)")
+
+    # Determine columns to drop based on threshold (preview)
+    cols_above = (miss_pct[miss_pct >= drop_cols_thresh].index.tolist()) if drop_cols else []
+    preview_df = raw_df.copy()
+    preview_audit = {"initial_rows": len(raw_df), "initial_cols": len(raw_df.columns)}
+
+    # preview drop columns
+    if cols_above:
+        preview_df = preview_df.drop(columns=cols_above)
+        preview_audit["cols_dropped_by_threshold"] = cols_above
+
+    # preview row drops
+    if row_drop_mode == "Drop rows with any missing value":
+        rows_after = len(preview_df.dropna())
+        preview_audit["rows_dropped_by_any_missing"] = int(len(preview_df) - rows_after)
+        preview_df_preview = preview_df.dropna()
+    elif row_drop_mode == "Drop rows with missing in selected columns" and cols_to_check:
+        before = len(preview_df)
+        preview_df_preview = preview_df.dropna(subset=cols_to_check)
+        preview_audit["rows_dropped_by_selected_cols"] = int(before - len(preview_df_preview))
     else:
-        clean_df = raw_df.copy()
+        preview_df_preview = preview_df
 
-    st.markdown("### Missing values overview")
-    summary = _missing_summary(raw_df)
-    st.dataframe(summary)
+    st.markdown("**Preview shape after applying chosen options**")
+    st.write(f"Rows: {preview_df_preview.shape[0]}  —  Columns: {preview_df_preview.shape[1]}")
+    st.markdown("**What would be dropped (preview)**")
+    if cols_above:
+        st.write(f"- Columns to be dropped (missing ≥ {drop_cols_thresh:.2%}):")
+        st.write(cols_above)
+    else:
+        st.write("- No columns will be dropped by threshold.")
 
-    # give quick stats
-    total_missing = int(summary["missing_count"].sum())
-    st.markdown(f"**Total missing cells:** {total_missing}")
+    if row_drop_mode == "Don't drop rows":
+        st.write("- Rows will not be dropped.")
+    elif row_drop_mode == "Drop rows with any missing value":
+        st.write(f"- Rows with any missing value will be dropped. Count preview: {preview_audit.get('rows_dropped_by_any_missing',0)}")
+    else:
+        st.write(f"- Rows with missing in selected columns {cols_to_check} will be dropped. Count preview: {preview_audit.get('rows_dropped_by_selected_cols',0)}")
 
-    # threshold to drop columns with too many missing values
-    drop_thresh = st.slider("Drop columns with missing % >= ", 0.0, 1.0, 0.5, step=0.05, format="%.2f")
-    cols_high_missing = summary[summary["missing_pct"] >= drop_thresh].index.tolist()
-    if cols_high_missing:
-        st.warning(f"Columns above threshold ({drop_thresh*100:.0f}%): {', '.join(cols_high_missing[:6])}" + (", ..." if len(cols_high_missing)>6 else ""))
-
-    st.markdown("---")
-    st.markdown("### Per-column strategies")
-    # Prepare a stateful dict to store chosen strategies
-    if "cleaning_plans" not in st.session_state:
-        st.session_state.cleaning_plans = {}
-
-    cols = raw_df.columns.tolist()
-    for col in cols:
-        with st.expander(f"{col} — {str(raw_df[col].dtype)} — missing {int(summary.loc[col,'missing_count'])} ({summary.loc[col,'missing_pct']*100:.1f}%)", expanded=False):
-            st.write("Preview:")
-            st.dataframe(raw_df[[col]].head(5))
-            default = _default_strategy_for_series(raw_df[col])
-            # read existing choice
-            prev = st.session_state.cleaning_plans.get(col, {}).get("strategy", default)
-            strategy = st.selectbox(f"Strategy for `{col}`", options=["leave","drop","median","mean","mode","constant","missing_token","ffill","bfill","interpolate","knn","mice"], index=["leave","drop","median","mean","mode","constant","missing_token","ffill","bfill","interpolate","knn","mice"].index(prev) if prev in ["leave","drop","median","mean","mode","constant","missing_token","ffill","bfill","interpolate","knn","mice"] else 0, key=f"strat_{col}")
-            const_val = None
-            if strategy == "constant":
-                const_val = st.text_input(f"Constant value for `{col}`", key=f"const_{col}")
-            create_indicator = st.checkbox("Create missing indicator column", value=st.session_state.cleaning_plans.get(col, {}).get("indicator", False), key=f"ind_{col}")
-            # group-by option
-            groupby_opt = None
-            st.session_state.cleaning_plans[col] = {"strategy": strategy, "constant": const_val, "indicator": create_indicator, "groupby": groupby_opt}
+    st.markdown("**Preview sample**")
+    st.dataframe(preview_df_preview.head(50))
 
     st.markdown("---")
-    st.markdown("### Actions")
-    c1, c2, c3, c4 = st.columns(4)
-    with c1:
-        if st.button("Preview changes"):
-            # build a preview dataframe applying strategies to copies (no session write)
-            preview_df = clean_df.copy()
-            change_log = {}
-            for col, plan in st.session_state.cleaning_plans.items():
-                strat = plan["strategy"]
-                const = plan.get("constant")
-                if strat in ("knn","mice"):
-                    # skip dataframe-level methods in preview (show notice)
-                    change_log[col] = {"note":"requires dataframe-level imputer (skipped in preview)"}
-                    continue
-                new_col, info = _apply_strategy_to_series(preview_df[col], strat, constant_value=const, df=preview_df)
-                if new_col is None:
-                    preview_df.drop(columns=[col], inplace=True)
-                    change_log[col] = {"action":"drop"}
-                else:
-                    preview_df[col] = new_col
-                    change_log[col] = info
-                if plan.get("indicator"):
-                    preview_df[f"{col}__missing"] = preview_df[col].isna().astype(int)
-            st.write("Preview head (first 10 rows):")
-            st.dataframe(preview_df.head(10))
-            st.write("Preview change log (per column):")
-            st.json(change_log)
 
-    with c2:
-        if st.button("Apply selected strategies"):
-            # Apply column-level strategies
-            new_df = clean_df.copy()
-            applied_log = {}
-            # optionally drop columns above threshold first
-            for drop_col in cols_high_missing:
-                if drop_col in new_df.columns:
-                    new_df.drop(columns=[drop_col], inplace=True)
-                    applied_log[drop_col] = {"action":"dropped_due_missing_pct"}
-            # apply per-column
-            for col, plan in st.session_state.cleaning_plans.items():
-                if col not in new_df.columns:
-                    continue
-                strat = plan["strategy"]
-                const = plan.get("constant")
-                if strat == "knn" or strat == "mice":
-                    # skip here; handle after loop at dataframe-level
-                    continue
-                new_col, info = _apply_strategy_to_series(new_df[col], strat, constant_value=const, df=new_df)
-                if new_col is None:
-                    if col in new_df.columns:
-                        new_df.drop(columns=[col], inplace=True)
-                        applied_log[col] = {"action":"dropped_by_plan"}
-                else:
-                    new_df[col] = new_col
-                    applied_log[col] = info
-                if plan.get("indicator"):
-                    new_df[f"{col}__missing"] = raw_df[col].isna().astype(int)  # indicator based on original raw
-            # handle knn/mice if requested:
-            # KNN/Iterative imputers usually need numeric columns; find columns that requested knn/mice
-            knn_cols = [col for col, p in st.session_state.cleaning_plans.items() if p["strategy"]=="knn" and col in new_df.columns]
-            mice_cols = [col for col, p in st.session_state.cleaning_plans.items() if p["strategy"]=="mice" and col in new_df.columns]
-            if SKLEARN_AVAILABLE and (knn_cols or mice_cols):
-                # Select numeric columns for imputation; for simplicity restrict to numeric subset
-                num_cols = new_df.select_dtypes(include=["number"]).columns.tolist()
-                impute_cols = [c for c in num_cols if c in (knn_cols + mice_cols)]
-                if impute_cols:
-                    # Prepare imputer for knn (if any)
-                    if knn_cols:
-                        try:
-                            knn_imp = KNNImputer(n_neighbors=5)
-                            new_df[impute_cols] = knn_imp.fit_transform(new_df[impute_cols])
-                            for c in impute_cols:
-                                applied_log[c] = {"strategy":"knn_imputed"}
-                        except Exception as e:
-                            st.error(f"KNN imputation failed: {e}")
-                    # MICE / Iterative
-                    if mice_cols:
-                        try:
-                            mice_imp = IterativeImputer(max_iter=10, random_state=0)
-                            new_df[impute_cols] = mice_imp.fit_transform(new_df[impute_cols])
-                            for c in impute_cols:
-                                applied_log[c] = {"strategy":"mice_imputed"}
-                        except Exception as e:
-                            st.error(f"Iterative imputation failed: {e}")
-                else:
-                    st.warning("No numeric columns available for KNN/MICE imputation; skipping those strategies.")
-            elif (knn_cols or mice_cols) and not SKLEARN_AVAILABLE:
-                st.warning("scikit-learn not available in environment — KNN/MICE skipped. Install scikit-learn to enable.")
+    # --- Actions: Apply, Save, Rollback
+    st.subheader("Apply changes")
+    apply_col, apply_notify = st.columns([1, 3])
+    with apply_col:
+        if st.button("Apply & Save cleaned dataset"):
+            # perform actual operations and save cleaned df to session
+            cleaned = raw_df.copy()
 
-            # Save cleaned df to session state and record meta
-            st.session_state[SESSION_CLEAN] = new_df
-            st.session_state[SESSION_CLEAN_META] = {"applied_log": applied_log, "n_rows": new_df.shape[0], "n_cols": new_df.shape[1]}
-            st.success("Cleaning applied and saved to session as '__cleaned_df__'.")
+            # drop columns if enabled
+            dropped_columns = []
+            if drop_cols and cols_above:
+                dropped_columns = cols_above
+                cleaned = cleaned.drop(columns=dropped_columns)
 
-    with c3:
-        if st.button("Quick Clean (safe defaults)"):
-            # safe defaults: numeric->median, categorical->mode, create indicators
-            qc_df = raw_df.copy()
-            qc_log = {}
-            for col in qc_df.columns:
-                s = qc_df[col]
-                if s.isna().sum() == 0:
-                    continue
-                if pd.api.types.is_numeric_dtype(s):
-                    med = s.median()
-                    qc_df[col] = s.fillna(med)
-                    qc_log[col] = {"strategy":"median","filled_with":med}
-                elif pd.api.types.is_datetime64_any_dtype(s):
-                    qc_df[col] = s.fillna(method="ffill")
-                    qc_log[col] = {"strategy":"ffill"}
-                elif pd.api.types.is_bool_dtype(s):
-                    # fill with mode
-                    try:
-                        m = s.mode().iloc[0]
-                    except Exception:
-                        m = False
-                    qc_df[col] = s.fillna(m)
-                    qc_log[col] = {"strategy":"mode","filled_with":m}
-                else:
-                    # categorical/text
-                    try:
-                        modev = s.mode().iloc[0]
-                    except Exception:
-                        modev = "__MISSING__"
-                    qc_df[col] = s.fillna(modev)
-                    qc_log[col] = {"strategy":"mode_or_missing","filled_with":modev}
-                # indicator
-                qc_df[f"{col}__missing"] = s.isna().astype(int)
-            st.session_state[SESSION_CLEAN] = qc_df
-            st.session_state[SESSION_CLEAN_META] = {"applied_log": qc_log, "method":"quick_clean", "n_rows": qc_df.shape[0], "n_cols": qc_df.shape[1]}
-            st.success("Quick-clean applied and saved to session as '__cleaned_df__'.")
+            # drop rows according to mode
+            dropped_rows_count = 0
+            if row_drop_mode == "Drop rows with any missing value":
+                before = len(cleaned)
+                cleaned = cleaned.dropna()
+                dropped_rows_count = before - len(cleaned)
+            elif row_drop_mode == "Drop rows with missing in selected columns" and cols_to_check:
+                before = len(cleaned)
+                cleaned = cleaned.dropna(subset=cols_to_check)
+                dropped_rows_count = before - len(cleaned)
 
-    with c4:
-        if st.button("Rollback to original raw"):
-            if SESSION_CLEAN in st.session_state:
-                del st.session_state[SESSION_CLEAN]
+            # save to session
+            st.session_state[SESSION_CLEAN] = cleaned
+            st.session_state[SESSION_CLEAN_META] = {
+                "cols_dropped_by_threshold": dropped_columns,
+                "rows_dropped_count": int(dropped_rows_count),
+                "method": "drop",
+                "drop_cols_threshold": float(drop_cols_thresh),
+                "row_drop_mode": row_drop_mode,
+                "row_drop_columns": cols_to_check
+            }
+
+            st.success(f"Applied cleaning. Cleaned dataset saved to session as '{SESSION_CLEAN}'.")
+            st.info(f"Dropped {len(dropped_columns)} columns and {dropped_rows_count} rows.")
+
+    with apply_notify:
+        st.write("After applying you can preview the cleaned dataset and download it. Use rollback to remove the cleaned dataset from session if you need to retry.")
+
+    st.markdown("---")
+
+    # --- Show current cleaned dataset if present
+    st.subheader("Current cleaned dataset (if any)")
+    if SESSION_CLEAN in st.session_state:
+        cd = st.session_state[SESSION_CLEAN]
+        meta = st.session_state.get(SESSION_CLEAN_META, {})
+        st.write(f"Cleaned shape: {cd.shape[0]} rows × {cd.shape[1]} columns")
+        if meta:
+            st.write("Audit:")
+            st.json(meta)
+        st.dataframe(cd.head(100))
+        csv = cd.to_csv(index=False).encode("utf-8")
+        st.download_button("Download cleaned CSV", csv, file_name="cleaned_dataset.csv", mime="text/csv")
+
+        if st.button("Rollback cleaned dataset (remove from session)"):
+            del st.session_state[SESSION_CLEAN]
             if SESSION_CLEAN_META in st.session_state:
                 del st.session_state[SESSION_CLEAN_META]
-            st.success("Rolled back cleaned dataset from session. Raw dataset remains in '__uploaded_df__'.")
+            st.success("Rolled back cleaned dataset from session.")
+    else:
+        st.info("No cleaned dataset in session. Use 'Apply & Save cleaned dataset' to create one.")
 
     st.markdown("---")
-    st.markdown("### Current cleaned dataset preview (if any)")
-    if SESSION_CLEAN in st.session_state:
-        st.dataframe(st.session_state[SESSION_CLEAN].head(50))
-        # download
-        csv = st.session_state[SESSION_CLEAN].to_csv(index=False).encode("utf-8")
-        st.download_button("Download cleaned CSV", csv, file_name="cleaned_dataset.csv", mime="text/csv")
-    else:
-        st.info("No cleaned dataset in session. Apply cleaning or use Quick Clean.")
-
-    # End of render
+    st.caption("This cleaning page intentionally keeps behavior simple and reproducible: dropping missing values is deterministic and avoids complex imputation issues. If you want imputation later, we can add controlled options (median/group-median/knn/mice) with validation tools.")
