@@ -76,7 +76,7 @@ def render_about():
         """
         <div class="aa-hero">
             <span class="aa-badge">AutoAnalyst AI</span>
-            <h1>Exploratory Analysis · AutoML · NL→SQL · Explainability</h1>
+            <h1>Exploratory Analysis · AutoML · NL→SQL </h1>
             <p>A clean, end-to-end workspace that takes you from raw data to insights and models — fast, accurate, and explainable.</p>
         </div>
         """, unsafe_allow_html=True
@@ -92,8 +92,8 @@ def render_about():
         • <b>Data cleaning:</b> simple, accurate cleaning (median impute / drop).<br>
         • <b>EDA:</b> elegant visuals, missingness maps, correlations, outliers, one-paragraph narrative.<br>
         • <b>Natural Language → SQL:</b> convert English instructions to clean, executable SQL.<br>
-        • <b>AutoML:</b> recommended models, hyperparameter options, CV, model export.<br>
-        • <b>Predict & Explain:</b> model prediction + SHAP visual explanations.<br>
+        • <b>AutoML:</b> select a model, train it in your dataset and view evaluation metrics.<br>
+        • <b>Predict & Explain:</b> Run predictions on new data and visualize feature contributions for transparent, explainable results.<br>
         </div>
         </div>
         """,
@@ -109,8 +109,7 @@ def render_about():
                 <div class="aa-badge">Visual EDA</div>
                 <div class="aa-feature-title">Analyst-quality summaries</div>
                 <div class="aa-feature-body">
-                    Automated visuals + a clean narrative that avoids false insights through safe,
-                    conservative heuristics (no ID-column mistakes, weak correlations, or fake Pareto).
+                    Automated charts and narratives that avoid misleading insights through conservative heuristics: ID-column detection, filtered correlations, and correct Pareto logic.
                 </div>
             </div>
             """,
@@ -124,8 +123,7 @@ def render_about():
                 <div class="aa-badge">AutoML</div>
                 <div class="aa-feature-title">Model selection & SHAP</div>
                 <div class="aa-feature-body">
-                    Train recommended models, tune hyperparameters, run cross-validation,
-                    inspect feature importance and explain predictions using SHAP.
+                    Train a chosen algorithm, tune hyperparameters, evaluate model performance, and inspect SHAP explanations to understand how each feature influences predictions.
                 </div>
             </div>
             """,
@@ -139,8 +137,7 @@ def render_about():
                 <div class="aa-badge">NL → SQL</div>
                 <div class="aa-feature-title">Natural Language to SQL</div>
                 <div class="aa-feature-body">
-                    Convert plain English instructions into clean SQL queries —
-                    schema-aware, safe, and ready to execute.
+                    Translate English queries into accurate SQL, leveraging your dataset’s schema and safe rule-based parsing. Optionally execute the query in a sandbox for immediate feedback.
                 </div>
             </div>
             """,

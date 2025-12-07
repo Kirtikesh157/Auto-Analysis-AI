@@ -98,8 +98,7 @@ page_label = st.sidebar.radio("", labels, index=0, key="ui_menu")
 label_to_page = {item[0]: item[1] for item in menu_items}
 page = label_to_page.get(page_label, "Home")
 
-st.sidebar.markdown('<div style="margin-top:8px;"><button style="width:100%;padding:10px 12px;border-radius:10px;border:none;background:linear-gradient(90deg,#2563EB,#06B6D4);color:white;font-weight:700">+ New analysis</button></div>', unsafe_allow_html=True)
-st.sidebar.markdown('<div style="margin-top:12px;font-size:12px;color:#9CA3AF;text-align:center">Made with ❤️ — UI Skeleton</div>', unsafe_allow_html=True)
+st.sidebar.markdown('<div style="margin-top:12px;font-size:12px;color:#9CA3AF;text-align:center">Made with ❤️</div>', unsafe_allow_html=True)
 
 # Helper renderers used on Home (same as before)
 def feature_tile(icon, title, desc):
@@ -175,12 +174,6 @@ if page == "Home":
                 st.info("Recent analyses list (UI-only).")
         st.markdown("</div>", unsafe_allow_html=True)
 
-    with right:
-        card("Quick stats", [
-            "Datasets: 0  (UI placeholder)",
-            "Cleaned datasets: 0  (UI placeholder)",
-            "Last run: —"
-        ])
         st.markdown("")
         st.markdown('<div class="card">', unsafe_allow_html=True)
         st.subheader("Recent analyses")
