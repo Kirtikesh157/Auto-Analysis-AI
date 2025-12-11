@@ -9,7 +9,7 @@ from datetime import datetime
 
 def _css():
     st.markdown(
-        """
+        """ 
         <style>
         .aa-hero {
             background: linear-gradient(90deg, #0f172a 0%, #0ea5a4 50%, #3b82f6 100%);
