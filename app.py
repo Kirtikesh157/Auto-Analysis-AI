@@ -98,7 +98,7 @@ page_label = st.sidebar.radio("", labels, index=0, key="ui_menu")
 label_to_page = {item[0]: item[1] for item in menu_items}
 page = label_to_page.get(page_label, "Home")
 
-st.sidebar.markdown('<div style="margin-top:12px;font-size:12px;color:#9CA3AF;text-align:center">Made with ❤️</div>', unsafe_allow_html=True)
+st.sidebar.markdown('<div style="margin-top:12px;font-size:12px;color:#9CA3AF;text-align:center">Made By Kittu 👲🏻</div>', unsafe_allow_html=True)
 
 # Helper renderers used on Home (same as before)
 def feature_tile(icon, title, desc):
